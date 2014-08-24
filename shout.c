@@ -22,6 +22,62 @@
 #include <Python.h>
 #include <shout/shout.h>
 
+#ifndef Py_TYPE
+    #define Py_TYPE(ob) (((PyObject*)(ob))->ob_type)
+#endif
+
+// macro to make module init portable between python 2 and 3
+#if PY_MAJOR_VERSION >= 3
+    #define MOD_DEF(ob, name, doc, methods) \
+        static struct PyModuleDef moduledef = { \
+            PyModuleDef_HEAD_INIT, name, doc, -1, methods, }; \
+        ob = PyModule_Create(&moduledef);
+#else
+    #define MOD_DEF(ob, name, doc, methods) \
+        ob = Py_InitModule3(name, methods, doc);
+#endif
+
+// Macros were introduced in 2.6 to map "bytes" to "str" in Python 2.  Back port to 2.5.
+#if PY_VERSION_HEX >= 0x02060000
+    #include <bytesobject.h>
+#else
+    #define PyBytes_AS_STRING PyString_AS_STRING
+    #define PyBytes_Check PyString_Check
+    #define PyBytes_CheckExact PyString_CheckExact 
+    #define PyBytes_FromStringAndSize PyString_FromStringAndSize
+    #define PyBytes_GET_SIZE PyString_GET_SIZE
+    #define PyBytes_Size PyString_Size
+    #define _PyBytes_Resize _PyString_Resize
+#endif
+
+#if PY_MAJOR_VERSION >= 3
+    #define PyInt_Check PyLong_Check
+    #define PyString_FromString PyUnicode_FromString
+    #define PyString_FromStringAndSize PyUnicode_FromStringAndSize
+    #define PyString_Check PyUnicode_Check
+    #define PyString_Type PyUnicode_Type
+    #define PyString_Size PyUnicode_Size
+    #define PyInt_FromLong PyLong_FromLong
+    #define PyInt_AsLong PyLong_AsLong
+    #define PyInt_AS_LONG PyLong_AS_LONG
+    #define PyInt_Type PyLong_Type
+    #define PyString_FromFormatV PyUnicode_FromFormatV   
+    #define PyString_FromFormat PyUnicode_FromFormat
+    #define Py_TPFLAGS_HAVE_ITER 0
+
+    #define PyString_AsString PyUnicode_AsUTF8
+
+    #define TEXT_T Py_UNICODE
+
+    #define PyString_Join PyUnicode_Join
+
+inline void PyString_ConcatAndDel(PyObject** lhs, PyObject* rhs)
+{
+    PyUnicode_Concat(*lhs, rhs);
+    Py_DECREF(rhs);
+}
+#endif
+
 static PyObject* ShoutError;
 
 typedef struct {
@@ -116,8 +172,12 @@ static char docstring[] = "Shout library v2 interface\n\n"
   "      agent - for customizing the HTTP user-agent header\n\n";
 
 static PyTypeObject ShoutObject_Type = {
-  PyObject_HEAD_INIT(NULL)
-  0,
+#if PY_MAJOR_VERSION >= 3
+    PyVarObject_HEAD_INIT(0, 0) /* size is now part of macro */
+#else
+     PyObject_HEAD_INIT(0)   /* Must fill in type value later */
+     0,                  /* ob_size */
+#endif
   "shout.Shout",
   sizeof(ShoutObject),
   0,
@@ -226,9 +286,9 @@ void initshout(void) {
   PyObject* mod;
   PyObject* dict;
 
-  ShoutObject_Type.ob_type = &PyType_Type;
+  MOD_DEF(mod, "shout", docstring, ShoutMethods)
+  Py_TYPE(&ShoutObject_Type) = &PyType_Type;
 
-  mod = Py_InitModule3("shout", ShoutMethods, docstring);
   dict = PyModule_GetDict(mod);
   ShoutError = PyErr_NewException("shout.ShoutException", NULL, NULL);
   PyDict_SetItemString(dict, "ShoutException", ShoutError);
@@ -339,7 +399,7 @@ static PyObject* pshoutobj_getattr(PyObject* self, char* name) {
       return v;
     }
   }
-  return Py_FindMethod(ShoutObjectMethods, self, name);
+  return PyObject_GetAttrString(self, name);
 }
 
 static int pshoutobj_setattr(PyObject* self, char* name, PyObject* v) {
